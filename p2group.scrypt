@@ -1,0 +1,36 @@
+import "ec.scrypt";
+
+contract P2G {
+    // Pay to a group of public key holders privateley. 
+    // Any one of the belonging private keys can create
+    // a valid proof to unlock the funds.
+
+    static const int N_KEYS = 3;
+    Point[N_KEYS] pubKeys;
+    bytes st;
+
+    public function unlock(
+                        int[N_KEYS] eVals,
+                        int[N_KEYS] zVals,
+                        SigHashPreimage txPreimage
+                      ) {
+        require(Tx.checkPreimage(txPreimage));
+
+        bytes serAs = b'';
+        int sum_eVals = 0;
+
+        loop (N_KEYS) : i {
+            Point A_1 = EC.multGeneratorByScalar(zVals[i]);
+            Point A_2 = EC.negatePoint(EC.multByScalar(this.pubKeys[i], eVals[i]));
+            Point Ai = EC.addPoints(A_1, A_2);
+            serAs = serAs + EC.point2PubKey(Ai);    
+
+            sum_eVals = sum_eVals + eVals[i];
+        }
+
+        int o = unpack(sha256(txPreimage + this.st + serAs) + b'00') % (1 << 128);
+
+        require(o == EC.modReduce(sum_eVals, 1 << 128));
+    }
+
+}
