@@ -4,7 +4,9 @@ import random
 
 from bitcoinx import PrivateKey, PublicKey, double_sha256, Signature, sha256, SigHash
 from scryptlib import (
-        compile_contract, build_contract_class, build_type_classes, Sig, create_dummy_input_context, get_preimage_from_input_context
+        compile_contract, build_contract_class, build_type_classes, Sig,
+        create_dummy_input_context, get_preimage_from_input_context,
+        SigHashPreimage
         )
 
 
@@ -14,12 +16,12 @@ order = 0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141
 if __name__ == '__main__':
     contract = 'p2group.scrypt' 
 
-    #compiler_result = compile_contract(contract, debug=False)
-    #desc = compiler_result.to_desc()
+    compiler_result = compile_contract(contract, debug=False)
+    desc = compiler_result.to_desc()
 
     # Load desc instead:
-    with open('out/p2group_desc.json', 'r') as f:
-        desc = json.load(f)
+    #with open('out/p2group_desc.json', 'r') as f:
+    #    desc = json.load(f)
 
     type_classes = build_type_classes(desc)
     Point = type_classes['Point']
@@ -67,12 +69,13 @@ if __name__ == '__main__':
             continue
         e_int = random.randint(1, 2**128 - 1)
         ei = PrivateKey.from_int(e_int)
-        ei_neg = PrivateKey.from_int((e_int * -1 + order) % p)
 
         zi = PrivateKey.from_random()
         A_1 = G.multiply(zi._secret)
-        A_2 = key_pubs[i].multiply(ei_neg._secret)
-        Ai = PublicKey.combine_keys([A_1, A_2])
+        A_2 = key_pubs[i].multiply(ei._secret)
+        A_2_x, A_2_y = A_2.to_point()
+        A_2_neg = PublicKey.from_point(A_2_x, -A_2_y % p)
+        Ai = PublicKey.combine_keys([A_1, A_2_neg])
 
         sub_out.append((Ai, ei.to_int(), zi.to_int()))
 
@@ -83,7 +86,7 @@ if __name__ == '__main__':
                 tx_preimage + st + b''.join([out[0].to_bytes(compressed=False) for out in sub_out])
             ), byteorder='little') % 2**128
     e = (o - e_sum) % 2**128
-    z = PrivateKey.from_int((a.to_int() + e * x.to_int()) % p).to_int()
+    z = (a.to_int() + e * x.to_int()) % order
 
     e_all = []
     z_all = []
@@ -96,25 +99,26 @@ if __name__ == '__main__':
             e_all.append(ei)
             z_all.append(zi)
 
+
     ### Proof verificiation in Python
     ser_as = b''
     sum_e_vals = 0
     for i in range(n_keys):
-        ei_neg = PrivateKey.from_int((e_all[i] * -1 + order) % p)
-
+        ei = PrivateKey.from_int(e_all[i])
         A_1 = G.multiply(PrivateKey.from_int(z_all[i])._secret)
-        A_2 = key_pubs[i].multiply(ei_neg._secret)
-        Ai = PublicKey.combine_keys([A_1, A_2])
+        A_2 = key_pubs[i].multiply(ei._secret)
+        A_2_x, A_2_y = A_2.to_point()
+        A_2_neg = PublicKey.from_point(A_2_x, -A_2_y % p)
+        Ai = PublicKey.combine_keys([A_1, A_2_neg])
+        
         ser_as +=  Ai.to_bytes(compressed=False)
-
         sum_e_vals += e_all[i]
 
-    print(ser_as.hex())
     o = int.from_bytes(sha256(tx_preimage + st + ser_as), byteorder='little') % 2**128
-    # TODO: compare o values... should be the same?
     assert o == (sum_e_vals % 2**128)
 
 
     ### Contract evaluation
+    assert p2g.unlock(e_all, z_all, SigHashPreimage(tx_preimage)).verify(context)
 
 
